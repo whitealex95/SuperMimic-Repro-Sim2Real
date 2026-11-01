@@ -21,6 +21,7 @@ dependencies = [
   "pandas",
   "pyarrow",
   "tqdm",
+  "wandb>=0.22",
 ]
 
 [project.scripts]

@@ -196,6 +196,9 @@ class TrainConfig:
     critic: CriticCfg = field(default_factory=CriticCfg)
     policy_trainer: PolicyTrainerCfg = field(default_factory=PolicyTrainerCfg)
     schedule: ScheduleCfg = field(default_factory=ScheduleCfg)
+    wandb: bool = True
+    wandb_project: str = "supermimic"
+    wandb_entity: str | None = None
     resume: Path | None = None
     # On resume, reset the sampler statistics (G_b <- G_max, memory <- uniform, visit counts n_b <- 0) instead of loading them; required when
     # the library changed (different bins). Model and optimizer states are still loaded.

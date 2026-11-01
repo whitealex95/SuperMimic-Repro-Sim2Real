@@ -8,7 +8,6 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 from supermimic.config import TrainConfig
 from supermimic.data.motion_convert import load_g1_model
@@ -21,6 +20,7 @@ from supermimic.imagination.policy_trainer import PolicyTrainer
 from supermimic.kinematics.g1_fk import G1Kinematics
 from supermimic.policy.nets import Critic, Policy
 from supermimic.training.distributed import allreduce_mean, broadcast_params, finalize, init_distributed, world_size
+from supermimic.training.run_logger import RunLogger, git_info, hardware_info
 from supermimic.training.schedule import cosine_lr
 from supermimic.world_model.heads import AnalyticHeads
 from supermimic.world_model.wm_trainer import WorldModelTrainer
@@ -29,6 +29,7 @@ from supermimic.world_model.world_model import WorldModel
 
 class Trainer:
     def __init__(self, cfg: TrainConfig):
+        t_setup = time.perf_counter()
         self.cfg = cfg
         cfg.policy.goal_dim = cfg.env.future_frames * 68 + (9 if cfg.env.anchor_obs else 0)
         cfg.policy_trainer.anchor_obs = cfg.env.anchor_obs
@@ -56,9 +57,35 @@ class Trainer:
         self.device = cfg.device
         self.log_dir = Path(cfg.log_root) / cfg.run_name
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.writer = None
         if self.is_main:
-            (self.log_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2, default=str))
-        self.writer = SummaryWriter(str(self.log_dir / "tb")) if self.is_main else None
+            self.run_info = {
+                "hardware": hardware_info(self.device),
+                "git": git_info(),
+                "world_size": self.world,
+                "seed": cfg.seed,
+                "optimizer": (
+                    f"Adam: world model lr {cfg.wm_trainer.lr:.3g} (default betas), policy lr {cfg.policy_trainer.lr:.3g} "
+                    f"betas {tuple(cfg.policy_trainer.betas)}, critic lr {cfg.policy_trainer.critic_lr:.3g} (default betas)"
+                ),
+                "lr_schedule": (
+                    f"constant {cfg.schedule.lr_constant}" if cfg.schedule.lr_constant is not None
+                    else f"cosine to {cfg.schedule.lr_final_ratio}x over {cfg.schedule.lr_decay_fraction:.5f} of {cfg.schedule.total_iterations} iterations, then constant"
+                ),
+                "batch": {
+                    "envs_per_gpu": cfg.env.num_envs,
+                    "wm_windows_per_update": cfg.wm_trainer.batches_per_update * cfg.wm_trainer.batch_size,
+                    "wm_window_steps": cfg.wm_trainer.window,
+                    "imagined_rollouts_per_update": cfg.policy_trainer.batch_size,
+                    "imagination_horizon": cfg.policy_trainer.horizon,
+                },
+            }
+            (self.log_dir / "config.json").write_text(json.dumps({**asdict(cfg), "run_info": self.run_info}, indent=2, default=str))
+            t0 = time.perf_counter()
+            self.writer = RunLogger(
+                self.log_dir, cfg.run_name, {**asdict(cfg), "run_info": self.run_info}, cfg.wandb, cfg.wandb_project, cfg.wandb_entity
+            )
+            self.time_wandb_init_s = time.perf_counter() - t0
 
         if cfg.data.library is not None:
             files = [cfg.data.library]
@@ -190,6 +217,8 @@ class Trainer:
             self.load(cfg.resume)
         # Warm-up counts from this run's start: a resumed run starts with an empty replay buffer too.
         self.start_iteration = self.iteration
+        self.start_updates = self.num_updates
+        self.time_setup_s = time.perf_counter() - t_setup
 
     # ------------------------------------------------------------------ checkpoints
 
@@ -274,7 +303,9 @@ class Trainer:
             lrs = ", ".join(f"{k} {v:.3g}" for k, v in self.effective_lrs().items())
             print(f"[INFO] lr schedule {mode}; effective lr at iteration {self.iteration}: {lrs}", flush=True)
         t_start = time.time()
+        t_loop = time.perf_counter()
         timers = {"sim": 0.0, "wm": 0.0, "policy": 0.0}
+        totals = {"sim": 0.0, "wm": 0.0, "policy": 0.0, "log": 0.0, "ckpt": 0.0}
         agg: dict[str, float] = {}
         agg_n = 0
         finished_returns: list[float] = []
@@ -326,6 +357,9 @@ class Trainer:
 
             # ---------------- logging / checkpoints
             if self.iteration % sch.log_interval == 0:
+                t_log = time.perf_counter()
+                for k, v in timers.items():
+                    totals[k] += v
                 it = self.iteration
                 elapsed = time.time() - t_start
                 if self.world > 1:
@@ -363,6 +397,10 @@ class Trainer:
                         self.writer.add_scalar(f"time/{k}_s_per_iter", v / sch.log_interval, it)
                     self.writer.add_scalar("time/hours", elapsed / 3600, it)
                     self.writer.add_scalar("time/updates", self.num_updates, it)
+                    self.writer.add_scalar("time/log_total_s", totals["log"], it)
+                    self.writer.add_scalar("time/ckpt_total_s", totals["ckpt"], it)
+                    for k, v in self.counts().items():
+                        self.writer.add_scalar(f"count/{k}", v, it)
                     self.writer.add_scalar("sampler/entropy", float(self.command.metrics["sampling_entropy"][0]), it)
                     self.writer.add_scalar("sampler/bin_return_mean", float(self.command.bin_return.mean()), it)
                     self.writer.add_scalar("sampler/visited_frac", float((self.command.bin_visits > 0).float().mean()), it)
@@ -383,12 +421,16 @@ class Trainer:
                         f"t sim/wm/pi {timers['sim']:.1f}/{timers['wm']:.1f}/{timers['policy']:.1f}s"
                     )
                     print(msg, flush=True)
+                    self.writer.commit()
                 agg, agg_n = {}, 0
                 finished_returns, finished_lens = [], []
                 timers = {k: 0.0 for k in timers}
+                totals["log"] += time.perf_counter() - t_log
             if self.iteration % sch.checkpoint_interval == 0:
+                t0 = time.perf_counter()
                 self.save("ckpt_latest.pt")
                 self.save(f"ckpt_{self.iteration:07d}.pt")
+                totals["ckpt"] += time.perf_counter() - t0
             if sch.max_hours is not None and self.iteration % sch.log_interval == 0:
                 stop = float((time.time() - t_start) / 3600 > sch.max_hours)
                 if self.world > 1:
@@ -397,7 +439,37 @@ class Trainer:
                     if self.is_main:
                         print("[INFO] max_hours reached, stopping")
                     break
+        loop_s = time.perf_counter() - t_loop
+        t0 = time.perf_counter()
         self.save("ckpt_latest.pt")
+        totals["ckpt"] += time.perf_counter() - t0
         if self.writer is not None:
-            self.writer.flush()
+            # Wall-clock seconds; the stage timers synchronize CUDA, so they include waiting for the GPU.
+            self.writer.summary(
+                {
+                    "time/setup_s": self.time_setup_s,
+                    "time/wandb_init_s": self.time_wandb_init_s,
+                    "time/loop_total_s": loop_s,
+                    "time/loop_sim_s": totals["sim"],
+                    "time/loop_wm_s": totals["wm"],
+                    "time/loop_policy_s": totals["policy"],
+                    "time/loop_log_s": totals["log"],
+                    "time/ckpt_s": totals["ckpt"],
+                    "iteration_start": self.start_iteration,
+                    "iteration_end": self.iteration,
+                    **{f"count/{k}": v for k, v in self.counts().items()},
+                }
+            )
+            self.writer.finish()
         finalize()
+
+    def counts(self) -> dict[str, int]:
+        """Examples processed by this run (all GPUs), counted from its start."""
+        cfg, w = self.cfg, self.world
+        n_up = self.num_updates - self.start_updates
+        return {
+            "env_steps": (self.iteration - self.start_iteration) * cfg.env.num_envs * w,
+            "updates": n_up,
+            "wm_windows": n_up * cfg.wm_trainer.batches_per_update * cfg.wm_trainer.batch_size * w,
+            "imagined_steps": n_up * cfg.policy_trainer.batch_size * cfg.policy_trainer.horizon * w,
+        }
