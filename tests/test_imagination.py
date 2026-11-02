@@ -35,7 +35,7 @@ def test_training_smoke(tmp_path):
     from supermimic.config import TrainConfig
     from supermimic.training.loop import Trainer
 
-    cfg = TrainConfig(run_name="smoke", log_root=tmp_path, seed=1)
+    cfg = TrainConfig(run_name="smoke", log_root=tmp_path, seed=1, wandb=False)
     cfg.data.clips = ["walk1_subject1"]
     cfg.env.num_envs = 128
     cfg.env.replay_capacity = 200

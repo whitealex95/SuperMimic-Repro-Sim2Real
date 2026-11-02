@@ -470,7 +470,7 @@ def test_trainer_finetune_resume(tmp_path, capsys):
         cfg.schedule.checkpoint_interval = 1000
         return cfg
 
-    cfg = small(TrainConfig(run_name="a", log_root=tmp_path, seed=1))
+    cfg = small(TrainConfig(run_name="a", log_root=tmp_path, seed=1, wandb=False))
     cfg.data.clips = ["walk1_subject1"]
     cfg.schedule.total_iterations = 20
     tr = Trainer(cfg)
@@ -478,7 +478,7 @@ def test_trainer_finetune_resume(tmp_path, capsys):
     tr.env.close()
     ck = tmp_path / "a" / "ckpt_latest.pt"
 
-    cfg2 = small(TrainConfig(run_name="b", log_root=tmp_path, seed=2, resume=ck))
+    cfg2 = small(TrainConfig(run_name="b", log_root=tmp_path, seed=2, resume=ck, wandb=False))
     cfg2.data.clips = ["walk1_subject1", "dance1_subject1"]
     cfg2.schedule.total_iterations = 40
     cfg2.schedule.lr_constant = 5e-5
