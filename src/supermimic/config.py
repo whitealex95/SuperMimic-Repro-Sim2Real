@@ -33,6 +33,7 @@ class EnvCfg:
     future_frames: int = 10
     compact_library: bool = False
     anchor_obs: bool = False
+    heading_ori_obs: bool = False  # SONIC v1.1 heading-frame pelvis orientation per goal frame (deviation)
     # Waist-locked G1 (real robot mode_machine 6, "g1_29dof_lock_waist_rev_1_0"): waist roll/pitch removed from the
     # simulated model, 29-d action/observation interface unchanged (actions 13/14 ignored, q/dq 13/14 read 0).
     lock_waist: bool = False

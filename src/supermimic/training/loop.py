@@ -31,8 +31,10 @@ class Trainer:
     def __init__(self, cfg: TrainConfig):
         t_setup = time.perf_counter()
         self.cfg = cfg
-        cfg.policy.goal_dim = cfg.env.future_frames * 68 + (9 if cfg.env.anchor_obs else 0)
+        cfg.policy.goal_frames = cfg.env.future_frames
+        cfg.policy.goal_dim = cfg.env.future_frames * (68 + (6 if cfg.env.heading_ori_obs else 0)) + (9 if cfg.env.anchor_obs else 0)
         cfg.policy_trainer.anchor_obs = cfg.env.anchor_obs
+        cfg.policy_trainer.heading_ori_obs = cfg.env.heading_ori_obs
         cfg.policy_trainer.imu_sat_prob = cfg.env.imu_sat_prob
         cfg.policy_trainer.imu_gyro_limit = cfg.env.imu_gyro_limit
         cfg.policy_trainer.imu_accel_k_max = cfg.env.imu_accel_k_max
@@ -108,6 +110,7 @@ class Trainer:
                 replay_capacity=cfg.env.replay_capacity,
                 compact_library=cfg.env.compact_library,
                 anchor_obs=cfg.env.anchor_obs,
+                heading_ori_obs=cfg.env.heading_ori_obs,
                 lock_waist=cfg.env.lock_waist,
                 lock_waist_refs=cfg.env.lock_waist_refs,
                 locked_action_weight=cfg.env.locked_action_weight,

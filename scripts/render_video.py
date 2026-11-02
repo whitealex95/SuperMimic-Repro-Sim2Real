@@ -52,7 +52,7 @@ def rollout(ckpt: Path, files: list[str], max_steps: int, device: str, lock_wais
         sampling_mode="start",
         record_transitions=False,
         seed=0,
-        anchor_obs=cfg["env"].get("anchor_obs", False),
+        anchor_obs=cfg["env"].get("anchor_obs", False), heading_ori_obs=cfg["env"].get("heading_ori_obs", False),
         lock_waist=lock,
         lock_waist_refs=refs,
         **coupling_args(resolve_coupling(cfg["env"])),  # waist coupling: SM_WAIST_COUPLING, else as trained (default off)

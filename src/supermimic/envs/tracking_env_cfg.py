@@ -116,6 +116,7 @@ class SuperMimicEnvCfgArgs:
     bin_frames: int = 50
     compact_library: bool = False
     anchor_obs: bool = False  # add BeyondMimic anchor-relative pose (9) to the goal group (plan D5 alt.)
+    heading_ori_obs: bool = False  # DEVIATION when on: SONIC v1.1 heading-frame pelvis orientation (6 per goal frame)
     debug_vis: bool = False  # draw the reference ghost in the viewer (scripts/play.py)
     # Waist-locked robot (real G1 mode_machine 6): waist roll/pitch removed from the model, actions 13/14 ignored,
     # observed q/dq 13/14 exactly 0. lock_waist_refs: "feasible" = references with waist roll/pitch (and rates) zeroed
@@ -184,6 +185,11 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
         "goal": ObservationGroupCfg(
             terms={
                 "future_frames": ObservationTermCfg(func=sm_obs.goal_future_frames, params={"command_name": "motion"}),
+                **(
+                    {"heading_ori": ObservationTermCfg(func=sm_obs.goal_heading_ori, params={"command_name": "motion"}, noise=noise(-0.05, 0.05))}
+                    if a.heading_ori_obs
+                    else {}
+                ),
                 **(
                     {
                         "anchor_pos": ObservationTermCfg(func=track_mdp.motion_anchor_pos_b, params={"command_name": "motion"}, noise=noise(-0.25, 0.25)),

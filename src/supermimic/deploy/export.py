@@ -367,7 +367,7 @@ def onnx(ckpts: tuple[str, ...] = CKPTS, opset: int = 18, n_random: int = 256, c
         src = ART / "ckpts" / Path(ck).name
         src = src if src.exists() else Path(ck)
         policy, pcfg = load_policy_from_checkpoint(src, "cpu")
-        assert not pcfg["env"].get("anchor_obs", False) and pcfg["env"]["future_frames"] == 10, pcfg["env"]
+        assert not pcfg["env"].get("anchor_obs", False) and not pcfg["env"].get("heading_ori_obs", False) and pcfg["env"]["future_frames"] == 10, pcfg["env"]
         out = ART / ckpt_tag(ck) / "policy.onnx"
         out.parent.mkdir(parents=True, exist_ok=True)
         model = _Export(policy).eval()

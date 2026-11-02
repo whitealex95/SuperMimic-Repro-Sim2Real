@@ -12,7 +12,7 @@ from supermimic.envs.mdp.motion_library import MotionLibrary
 from supermimic.imagination.compiled import REWARD_TERM_NAMES, ImagStep
 from supermimic.policy.nets import Policy
 from supermimic.kinematics.rotations import projected_gravity
-from supermimic.world_model.heads import ReferenceFrame, analytic_observation, anchor_relative_obs, flatten_history_term_major
+from supermimic.world_model.heads import ReferenceFrame, analytic_observation, anchor_relative_obs, flatten_history_term_major, heading_relative_ori
 from supermimic.world_model.wm_trainer import reference_at
 from supermimic.world_model.world_model import WorldModel
 
@@ -44,6 +44,7 @@ def imagine(
     obs_noise: bool = True,
     step_fn: ImagStep | None = None,
     anchor_obs: bool = False,
+    heading_ori_obs: bool = False,
     imu: ImuImagCfg | None = None,
 ) -> ImagRollout:
     device = start.state.device
@@ -64,8 +65,13 @@ def imagine(
             return o + (torch.rand_like(o) * 2 - 1) * noise_half
         return o
 
-    def make_goal(frame_t, ref_t, anchor_pose):
+    def make_goal(frame_t, ref_t, anchor_pose, s_t):
         g = lib.goal_window(frame_t, future_frames)
+        if heading_ori_obs:
+            h = heading_relative_ori(s_t[..., 3:7], lib.goal_root_quat(frame_t, future_frames))
+            if obs_noise:
+                h = h + (torch.rand_like(h) * 2 - 1) * 0.05
+            g = torch.cat([g, h], dim=-1)
         if not anchor_obs:
             return g
         rel = anchor_relative_obs(anchor_pose[..., 0:3], anchor_pose[..., 3:7], ref_t.body_pos_w[..., ai, :], ref_t.body_quat_w[..., ai, :])
@@ -125,7 +131,7 @@ def imagine(
         anchor_pose = torch.cat([b0["pos"][..., ai, :], b0["quat"][..., ai, :]], dim=-1)
     else:
         anchor_pose = None
-    goals = [make_goal(frame, ref, anchor_pose)]
+    goals = [make_goal(frame, ref, anchor_pose, s)]
     e_roots = [wm.heads.root_error_features(s, ref)]
     term_sum = torch.zeros(len(REWARD_TERM_NAMES), device=device)
 
@@ -149,7 +155,7 @@ def imagine(
         rewards.append(r)
         dhats.append(d)
         survivals.append(c)
-        goals.append(make_goal(frame, ref, anchor_pose))
+        goals.append(make_goal(frame, ref, anchor_pose, s))
         e_roots.append(wm.heads.root_error_features(s, ref))
         frames.append(frame)
 

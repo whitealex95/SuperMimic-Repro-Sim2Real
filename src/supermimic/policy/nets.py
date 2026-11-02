@@ -26,7 +26,8 @@ class PolicyCfg:
     # Fixed goal feature scales: joint_pos 29, joint_vel 29, grav 3, ang_vel_b 3, lin_vel_h 3, height 1.
     goal_term_scale: tuple[float, ...] = (1.0, 5.0, 1.0, 2.0, 1.0, 1.0)
     decoder_last_gain: float = 0.01
-    goal_dim: int = GOAL_DIM  # 680 (+9 with anchor_obs)
+    goal_dim: int = GOAL_DIM  # 680 (+60 with heading_ori_obs, +9 with anchor_obs)
+    goal_frames: int = 10
 
 
 @dataclass
@@ -44,8 +45,8 @@ def _obs_scale_vector(cfg: PolicyCfg) -> torch.Tensor:
 def _goal_scale_vector(cfg: PolicyCfg, goal_dim: int) -> torch.Tensor:
     sizes = (29, 29, 3, 3, 3, 1)
     per_frame = torch.cat([torch.full((n,), 1.0 / s) for n, s in zip(sizes, cfg.goal_term_scale)])
-    k, extra = divmod(goal_dim, 68)
-    return torch.cat([per_frame.repeat(k), torch.ones(extra)])
+    k = cfg.goal_frames
+    return torch.cat([per_frame.repeat(k), torch.ones(goal_dim - 68 * k)])
 
 
 class MotionEncoder(nn.Module):

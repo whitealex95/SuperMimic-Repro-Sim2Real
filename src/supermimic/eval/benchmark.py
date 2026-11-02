@@ -60,7 +60,7 @@ def _tilt_deg(cmd) -> torch.Tensor:
 
 def make_benchmark_env(npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, anchor_obs: bool = False,
                        lock_waist: bool = False, lock_waist_refs: str = "feasible", locked_action_weight: float = 0.0,
-                       waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None):
+                       waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None, heading_ori_obs: bool = False):
     """npz_files may be a single packed library .pt (build_library.py), which loads in compact mode."""
     compact = len(npz_files) == 1 and str(npz_files[0]).endswith(".pt")
     n_clips = len(torch.load(npz_files[0], map_location="cpu", mmap=True, weights_only=False)["names"]) if compact else len(npz_files)
@@ -78,6 +78,7 @@ def make_benchmark_env(npz_files: list[str], device: str = "cuda:0", num_envs: i
         record_transitions=False,
         seed=0,
         anchor_obs=anchor_obs,
+        heading_ori_obs=heading_ori_obs,
         compact_library=compact,
         lock_waist=lock_waist,
         lock_waist_refs=lock_waist_refs,
@@ -91,12 +92,12 @@ def make_benchmark_env(npz_files: list[str], device: str = "cuda:0", num_envs: i
 @torch.no_grad()
 def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, verbose: bool = True, anchor_obs: bool = False,
                   lock_waist: bool = False, lock_waist_refs: str = "feasible", locked_action_weight: float = 0.0,
-                  waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None) -> list[ClipResult]:
+                  waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None, heading_ori_obs: bool = False) -> list[ClipResult]:
     """locked_action_weight defaults to 0 so that the benchmark reward is the same as the unlocked one (the term is
     a training-only regulariser); pass the training value to include it. waist_coupling = (k, c): evaluate on the robot
     with the real-G1 waist roll/pitch coupling (supermimic.deploy.waist_coupling); None = uncoupled (default).
     waist_roll_range: waist_roll_joint range +-r (supermimic.deploy.waist_roll); None = MJCF +-0.52 (default)."""
-    env = make_benchmark_env(npz_files, device, num_envs, future_frames, anchor_obs, lock_waist, lock_waist_refs, locked_action_weight, waist_coupling, waist_roll_range)
+    env = make_benchmark_env(npz_files, device, num_envs, future_frames, anchor_obs, lock_waist, lock_waist_refs, locked_action_weight, waist_coupling, waist_roll_range, heading_ori_obs)
     try:
         return run_benchmark_on_env(env, policy, verbose)
     finally:

@@ -16,6 +16,12 @@ def goal_future_frames(env: ManagerBasedRlEnv, command_name: str) -> torch.Tenso
     return command.goal
 
 
+def goal_heading_ori(env: ManagerBasedRlEnv, command_name: str) -> torch.Tensor:
+    """(N, K*6) reference pelvis orientation of the goal frames in the robot heading frame (SONIC v1.1)."""
+    command = cast(MultiClipMotionCommand, env.command_manager.get_term(command_name))
+    return command.goal_heading_ori
+
+
 def _slots(env: ManagerBasedRlEnv, robot) -> torch.Tensor:
     cache = getattr(env, "_sm_joint_slots", None)
     if cache is None:

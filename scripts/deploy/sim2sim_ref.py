@@ -52,7 +52,7 @@ def main(ckpt: Path, out: Path, tf32: bool = True, npz_dir: Path = Path("data/np
     args = SuperMimicEnvCfgArgs(
         npz_files=files, num_envs=len(files), future_frames=cfg["env"]["future_frames"], episode_length_s=1.0e5,
         action_noise_std=0.0, obs_noise=False, reset_noise=False, domain_randomization=False, sampling_mode="start",
-        record_transitions=False, seed=0, anchor_obs=cfg["env"].get("anchor_obs", False), **coupling_args(wc),
+        record_transitions=False, seed=0, anchor_obs=cfg["env"].get("anchor_obs", False), heading_ori_obs=cfg["env"].get("heading_ori_obs", False), **coupling_args(wc),
         **({} if wr is None else {"waist_roll_range": wr}),
     )
     env = make_env(args, device=device)

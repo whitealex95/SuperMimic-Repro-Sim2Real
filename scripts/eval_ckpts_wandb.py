@@ -34,7 +34,7 @@ from supermimic.eval.benchmark import (
 from supermimic.training.run_logger import git_info, hardware_info, init_wandb_online
 
 CKPT_RE = re.compile(r"ckpt_(\d{7})\.pt$")
-ENV_KEYS = ("future_frames", "anchor_obs", "lock_waist", "lock_waist_refs")
+ENV_KEYS = ("future_frames", "anchor_obs", "heading_ori_obs", "lock_waist", "lock_waist_refs")
 
 
 def list_ckpts(run_dir: Path, every: int) -> list[tuple[int, Path]]:
@@ -99,7 +99,7 @@ def main(run_dir: Path, npz_dir: Path = Path("data/npz/lafan1"), library: Path |
 
     t0 = time.perf_counter()
     env = make_benchmark_env(files, device, num_envs, env_cfg["future_frames"], env_cfg.get("anchor_obs", False), lock, refs,
-                             waist_coupling=wc, waist_roll_range=wr)
+                             waist_coupling=wc, waist_roll_range=wr, heading_ori_obs=env_cfg.get("heading_ori_obs", False))
     env_build_s = time.perf_counter() - t0
     lib = env.command_manager.get_term("motion").library
     print(f"[INFO] benchmark {set_name}: {lib.num_clips} clips, {lib.num_frames} frames, {env.num_envs} envs, built in {env_build_s:.1f} s", flush=True)

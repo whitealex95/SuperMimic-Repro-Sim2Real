@@ -259,6 +259,12 @@ class MultiClipMotionCommand(CommandTerm):
         return self.library.goal_window(self.frame, self.cfg.future_frames)
 
     @property
+    def goal_heading_ori(self) -> torch.Tensor:
+        from supermimic.world_model.heads import heading_relative_ori
+
+        return heading_relative_ori(self.robot_root_quat_w, self.library.goal_root_quat(self.frame, self.cfg.future_frames))
+
+    @property
     def joint_pos(self) -> torch.Tensor:
         return self._ref.joint_pos
 

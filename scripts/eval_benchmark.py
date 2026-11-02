@@ -35,7 +35,7 @@ def main(ckpt: Path, npz_dir: Path = Path("data/npz/lafan1"), clips: list[str] |
     refs = lock_waist_refs or cfg["env"].get("lock_waist_refs", "feasible")
     wc = resolve_coupling(cfg["env"]) if waist_coupling is None else ((waist_coupling_k, waist_coupling_c) if waist_coupling else None)
     wr = resolve_waist_roll_range(cfg["env"]) if waist_roll_range is None else waist_roll_range
-    results = run_benchmark(policy, files, device=device, num_envs=num_envs, future_frames=cfg["env"]["future_frames"], anchor_obs=cfg["env"].get("anchor_obs", False),
+    results = run_benchmark(policy, files, device=device, num_envs=num_envs, future_frames=cfg["env"]["future_frames"], anchor_obs=cfg["env"].get("anchor_obs", False), heading_ori_obs=cfg["env"].get("heading_ori_obs", False),
                             lock_waist=lock, lock_waist_refs=refs, waist_coupling=wc, waist_roll_range=wr)
     s = summarize(results)
     robot = (f"locked waist, {refs} refs" if lock else "29-DoF") + ("" if wc is None else f", waist coupling k {wc[0]} c {wc[1]}") + ("" if wr is None else f", waist roll range +-{wr}")

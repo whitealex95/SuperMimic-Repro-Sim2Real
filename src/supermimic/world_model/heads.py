@@ -54,6 +54,18 @@ def anchor_relative_obs(robot_anchor_pos: torch.Tensor, robot_anchor_quat: torch
 ANCHOR_OBS_DIM = 9
 
 
+def heading_relative_ori(robot_root_quat: torch.Tensor, ref_root_quat: torch.Tensor) -> torch.Tensor:
+    """Reference pelvis orientation in the robot pelvis heading (yaw) frame, as rot6d per goal frame
+    (SONIC v1.1 motion_anchor_orientation_heading). robot (N,4), ref (N,K,4) -> (N,K*6)."""
+    from supermimic.kinematics.rotations import heading_quat, quat_conjugate, quat_mul, rot6d_from_quat
+
+    h = quat_conjugate(heading_quat(robot_root_quat))[:, None, :].expand_as(ref_root_quat)  # (N,K,4)
+    return rot6d_from_quat(quat_mul(h, ref_root_quat)).reshape(ref_root_quat.shape[0], -1)
+
+
+HEADING_ORI_DIM = 6  # per goal frame
+
+
 def flatten_history_term_major(hist: torch.Tensor) -> torch.Tensor:
     """(H, N, 93) oldest→newest  ->  (N, 930) in mjlab's term-major layout [A_t0..A_tH-1, B_t0..]."""
     H, N, _ = hist.shape

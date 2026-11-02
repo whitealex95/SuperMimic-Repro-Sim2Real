@@ -249,11 +249,18 @@ class MotionLibrary:
     def last_frame_of(self, frame: torch.Tensor) -> torch.Tensor:
         return self.clip_last[self.frame_clip[frame]]
 
+    def goal_frames(self, frame: torch.Tensor, k: int) -> torch.Tensor:
+        """(N, k) frames frame..frame+k-1, clamped at the clip end."""
+        offs = torch.arange(k, device=self.device)
+        return torch.minimum(frame[:, None] + offs[None, :], self.last_frame_of(frame)[:, None])
+
+    def goal_root_quat(self, frame: torch.Tensor, k: int) -> torch.Tensor:
+        """(N, k, 4) reference pelvis quaternions of the goal frames."""
+        return self._ref[self.goal_frames(frame, k), 3:7].to(self.dtype)
+
     def goal_window(self, frame: torch.Tensor, k: int) -> torch.Tensor:
         """(N, k*68) goal features of frames frame..frame+k-1, clamped at the clip end."""
-        last = self.last_frame_of(frame)
-        offs = torch.arange(k, device=self.device)
-        idx = torch.minimum(frame[:, None] + offs[None, :], last[:, None])  # (N,k)
+        idx = self.goal_frames(frame, k)  # (N,k)
         if not self.compact:
             return self.goal_feat[idx].reshape(frame.shape[0], k * GOAL_FEAT_DIM)
         feat = goal_features(self.ref(idx.reshape(-1)), self.default_joint_pos)

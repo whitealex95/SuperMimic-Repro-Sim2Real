@@ -62,7 +62,7 @@ def main(
         sampling_mode=sampling,
         record_transitions=False,
         seed=0,
-        anchor_obs=cfg["env"].get("anchor_obs", False),
+        anchor_obs=cfg["env"].get("anchor_obs", False), heading_ori_obs=cfg["env"].get("heading_ori_obs", False),
         debug_vis=ghost,
         **coupling_args(resolve_coupling(cfg["env"])),  # waist coupling: SM_WAIST_COUPLING, else as trained (default off)
         **({} if (wr := resolve_waist_roll_range(cfg["env"])) is None else {"waist_roll_range": wr}),  # SM_WAIST_ROLL, else as trained
