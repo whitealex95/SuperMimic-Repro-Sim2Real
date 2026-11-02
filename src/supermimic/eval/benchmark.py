@@ -58,15 +58,13 @@ def _tilt_deg(cmd) -> torch.Tensor:
     return torch.rad2deg(torch.arccos(c.clamp(-1.0, 1.0)))
 
 
-@torch.no_grad()
-def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, verbose: bool = True, anchor_obs: bool = False,
-                  lock_waist: bool = False, lock_waist_refs: str = "feasible", locked_action_weight: float = 0.0,
-                  waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None) -> list[ClipResult]:
-    """locked_action_weight defaults to 0 so that the benchmark reward is the same as the unlocked one (the term is
-    a training-only regulariser); pass the training value to include it. waist_coupling = (k, c): evaluate on the robot
-    with the real-G1 waist roll/pitch coupling (supermimic.deploy.waist_coupling); None = uncoupled (default).
-    waist_roll_range: waist_roll_joint range +-r (supermimic.deploy.waist_roll); None = MJCF +-0.52 (default)."""
-    num_envs = min(num_envs or 1024, len(npz_files))
+def make_benchmark_env(npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, anchor_obs: bool = False,
+                       lock_waist: bool = False, lock_waist_refs: str = "feasible", locked_action_weight: float = 0.0,
+                       waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None):
+    """npz_files may be a single packed library .pt (build_library.py), which loads in compact mode."""
+    compact = len(npz_files) == 1 and str(npz_files[0]).endswith(".pt")
+    n_clips = len(torch.load(npz_files[0], map_location="cpu", mmap=True, weights_only=False)["names"]) if compact else len(npz_files)
+    num_envs = min(num_envs or 1024, n_clips)
     args = SuperMimicEnvCfgArgs(
         npz_files=npz_files,
         num_envs=num_envs,
@@ -80,81 +78,103 @@ def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", 
         record_transitions=False,
         seed=0,
         anchor_obs=anchor_obs,
+        compact_library=compact,
         lock_waist=lock_waist,
         lock_waist_refs=lock_waist_refs,
         locked_action_weight=locked_action_weight,
         **({} if waist_coupling is None else {"waist_coupling": True, "waist_coupling_k": waist_coupling[0], "waist_coupling_c": waist_coupling[1]}),
         **({} if waist_roll_range is None else {"waist_roll_range": waist_roll_range}),
     )
-    env = make_env(args, device=device)
-    try:
-        cmd = env.command_manager.get_term("motion")
-        lib = cmd.library
-        n_clips = lib.num_clips
-        max_r = 0.1  # paper reward upper bound per step (dt * 5)
+    return make_env(args, device=device)
 
-        # Clip queue: env e plays clips e, e+N, e+2N, ...
-        current = torch.arange(num_envs, device=device)
-        nxt = current + num_envs
-        cmd.forced_frame[:] = lib.clip_start[current]
-        obs, _ = env.reset()
-        cmd.forced_frame[:] = lib.clip_start[torch.clamp(nxt, max=n_clips - 1)]
-        active = torch.ones(num_envs, dtype=torch.bool, device=device)
-        ret_sum = torch.zeros(num_envs, device=device)
-        steps = torch.zeros(num_envs, dtype=torch.long, device=device)
-        term_names = list(env.reward_manager.active_terms)
-        term_sum = torch.zeros(num_envs, len(term_names), device=device)
-        tilt_sum = torch.zeros(num_envs, device=device)
-        tilt_max = torch.zeros(num_envs, device=device)
-        results: dict[int, ClipResult] = {}
-        remaining = n_clips
-        while remaining > 0:
-            act = policy(obs["policy"], obs["goal"])
-            obs, rew, term, tout, _ = env.step(act)
-            ret_sum += rew
-            term_sum += env.reward_manager.term_rewards
-            # Tilt of the state reached by this step vs the reference it was rewarded against. For envs that just
-            # reset the sim already holds the next clip's start, so their value is taken before the step (see below).
-            tilt = _tilt_deg(cmd)
-            steps += 1
-            done = (term | tout) & active
-            live = ~(term | tout)
-            tilt_sum += torch.where(live, tilt, torch.zeros_like(tilt))
-            tilt_max = torch.where(live, torch.maximum(tilt_max, tilt), tilt_max)
-            if done.any():
-                ids = done.nonzero().squeeze(-1)
-                for e in ids.tolist():
-                    ci = int(current[e])
-                    if ci < n_clips and ci not in results:
-                        st = int(steps[e])
-                        results[ci] = ClipResult(
-                            name=lib.clips[ci].name,
-                            frames=lib.clips[ci].length,
-                            steps=st,
-                            norm_return=float(ret_sum[e]) / (max_r * max(st, 1)),
-                            failed=bool(term[e]),
-                            fail_step=st if bool(term[e]) else -1,
-                            terms={n: float(term_sum[e, i]) / max(st, 1) for i, n in enumerate(term_names)},
-                            tilt_mean_deg=float(tilt_sum[e]) / max(st - 1, 1),
-                            tilt_max_deg=float(tilt_max[e]),
-                        )
-                        remaining -= 1
-                        if verbose and (len(results) % 50 == 0 or len(results) == n_clips):
-                            print(f"  evaluated {len(results)}/{n_clips}")
-                # advance the queue for these envs (the auto-reset already used forced_frame)
-                current[ids] = nxt[ids]
-                nxt[ids] = nxt[ids] + num_envs
-                finished = current[ids] >= n_clips
-                active[ids[finished]] = False
-                cmd.forced_frame[ids] = lib.clip_start[torch.clamp(nxt[ids], max=n_clips - 1)]
-                ret_sum[ids] = 0.0
-                term_sum[ids] = 0.0
-                tilt_sum[ids] = 0.0
-                tilt_max[ids] = 0.0
-                steps[ids] = 0
-        return [results[i] for i in range(n_clips)]
+
+@torch.no_grad()
+def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, verbose: bool = True, anchor_obs: bool = False,
+                  lock_waist: bool = False, lock_waist_refs: str = "feasible", locked_action_weight: float = 0.0,
+                  waist_coupling: tuple[float, float] | None = None, waist_roll_range: float | None = None) -> list[ClipResult]:
+    """locked_action_weight defaults to 0 so that the benchmark reward is the same as the unlocked one (the term is
+    a training-only regulariser); pass the training value to include it. waist_coupling = (k, c): evaluate on the robot
+    with the real-G1 waist roll/pitch coupling (supermimic.deploy.waist_coupling); None = uncoupled (default).
+    waist_roll_range: waist_roll_joint range +-r (supermimic.deploy.waist_roll); None = MJCF +-0.52 (default)."""
+    env = make_benchmark_env(npz_files, device, num_envs, future_frames, anchor_obs, lock_waist, lock_waist_refs, locked_action_weight, waist_coupling, waist_roll_range)
+    try:
+        return run_benchmark_on_env(env, policy, verbose)
     finally:
         env.close()
+
+
+@torch.no_grad()
+def run_benchmark_on_env(env, policy: Policy, verbose: bool = True) -> list[ClipResult]:
+    """Play every clip of the env's library once. The env can be reused for several policies."""
+    device = env.device
+    num_envs = env.num_envs
+    cmd = env.command_manager.get_term("motion")
+    lib = cmd.library
+    n_clips = lib.num_clips
+    assert num_envs <= n_clips, f"num_envs {num_envs} > {n_clips} clips"
+    report_every = max(50, n_clips // 20)
+    max_r = 0.1  # paper reward upper bound per step (dt * 5)
+
+    # Clip queue: env e plays clips e, e+N, e+2N, ...
+    current = torch.arange(num_envs, device=device)
+    nxt = current + num_envs
+    cmd.forced_frame[:] = lib.clip_start[current]
+    obs, _ = env.reset()
+    cmd.forced_frame[:] = lib.clip_start[torch.clamp(nxt, max=n_clips - 1)]
+    active = torch.ones(num_envs, dtype=torch.bool, device=device)
+    ret_sum = torch.zeros(num_envs, device=device)
+    steps = torch.zeros(num_envs, dtype=torch.long, device=device)
+    term_names = list(env.reward_manager.active_terms)
+    term_sum = torch.zeros(num_envs, len(term_names), device=device)
+    tilt_sum = torch.zeros(num_envs, device=device)
+    tilt_max = torch.zeros(num_envs, device=device)
+    results: dict[int, ClipResult] = {}
+    remaining = n_clips
+    while remaining > 0:
+        act = policy(obs["policy"], obs["goal"])
+        obs, rew, term, tout, _ = env.step(act)
+        ret_sum += rew
+        term_sum += env.reward_manager.term_rewards
+        # Tilt of the state reached by this step vs the reference it was rewarded against. For envs that just
+        # reset the sim already holds the next clip's start, so their value is taken before the step (see below).
+        tilt = _tilt_deg(cmd)
+        steps += 1
+        done = (term | tout) & active
+        live = ~(term | tout)
+        tilt_sum += torch.where(live, tilt, torch.zeros_like(tilt))
+        tilt_max = torch.where(live, torch.maximum(tilt_max, tilt), tilt_max)
+        if done.any():
+            ids = done.nonzero().squeeze(-1)
+            for e in ids.tolist():
+                ci = int(current[e])
+                if ci < n_clips and ci not in results:
+                    st = int(steps[e])
+                    results[ci] = ClipResult(
+                        name=lib.clips[ci].name,
+                        frames=lib.clips[ci].length,
+                        steps=st,
+                        norm_return=float(ret_sum[e]) / (max_r * max(st, 1)),
+                        failed=bool(term[e]),
+                        fail_step=st if bool(term[e]) else -1,
+                        terms={n: float(term_sum[e, i]) / max(st, 1) for i, n in enumerate(term_names)},
+                        tilt_mean_deg=float(tilt_sum[e]) / max(st - 1, 1),
+                        tilt_max_deg=float(tilt_max[e]),
+                    )
+                    remaining -= 1
+                    if verbose and (len(results) % report_every == 0 or len(results) == n_clips):
+                        print(f"  evaluated {len(results)}/{n_clips}")
+            # advance the queue for these envs (the auto-reset already used forced_frame)
+            current[ids] = nxt[ids]
+            nxt[ids] = nxt[ids] + num_envs
+            finished = current[ids] >= n_clips
+            active[ids[finished]] = False
+            cmd.forced_frame[ids] = lib.clip_start[torch.clamp(nxt[ids], max=n_clips - 1)]
+            ret_sum[ids] = 0.0
+            term_sum[ids] = 0.0
+            tilt_sum[ids] = 0.0
+            tilt_max[ids] = 0.0
+            steps[ids] = 0
+    return [results[i] for i in range(n_clips)]
 
 
 def summarize(results: list[ClipResult]) -> dict:

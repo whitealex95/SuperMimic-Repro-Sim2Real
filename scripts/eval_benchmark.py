@@ -1,6 +1,7 @@
 """Evaluate a checkpoint on every clip of a motion set (paper Appendix F protocol).
 
   uv run python scripts/eval_benchmark.py --ckpt logs/e2/ckpt_latest.pt --npz-dir data/npz/lafan1
+  uv run python scripts/eval_benchmark.py --ckpt logs/e2/ckpt_latest.pt --library data/library/bones_seed_compact_paper.pt --num-envs 8192
 
 Waist-locked robot (G1 mode_machine 6): ``--lock-waist`` (default: whatever the checkpoint was trained with), with
 ``--lock-waist-refs feasible|original`` (default: the checkpoint's setting, else feasible). The reward of the
@@ -22,13 +23,13 @@ from supermimic.envs.mdp.motion_library import discover_npz
 from supermimic.eval.benchmark import load_policy_from_checkpoint, run_benchmark, save_results, summarize
 
 
-def main(ckpt: Path, npz_dir: Path = Path("data/npz/lafan1"), clips: list[str] | None = None, clip_list: Path | None = None, manifest: Path | None = None, num_envs: int = 1024, device: str = "cuda:0", out: Path | None = None,
+def main(ckpt: Path, npz_dir: Path = Path("data/npz/lafan1"), clips: list[str] | None = None, clip_list: Path | None = None, manifest: Path | None = None, library: Path | None = None, num_envs: int = 1024, device: str = "cuda:0", out: Path | None = None,
          lock_waist: bool | None = None, lock_waist_refs: str | None = None, waist_coupling: bool | None = None,
          waist_coupling_k: float = WAIST_COUPLING_K, waist_coupling_c: float = WAIST_COUPLING_C, waist_roll_range: float | None = None) -> None:
     """waist_roll_range: waist_roll_joint range +-r; default SM_WAIST_ROLL range, else as trained, else MJCF +-0.52."""
     if clip_list is not None:
         clips = [l.strip() for l in open(clip_list) if l.strip()]
-    files = [str(f) for f in discover_npz(npz_dir, names=clips, manifest=manifest)]
+    files = [str(library)] if library is not None else [str(f) for f in discover_npz(npz_dir, names=clips, manifest=manifest)]
     policy, cfg = load_policy_from_checkpoint(ckpt, device)
     lock = cfg["env"].get("lock_waist", False) if lock_waist is None else lock_waist
     refs = lock_waist_refs or cfg["env"].get("lock_waist_refs", "feasible")

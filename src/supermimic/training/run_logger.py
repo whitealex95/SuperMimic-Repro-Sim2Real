@@ -45,6 +45,19 @@ def git_info() -> dict:
     }
 
 
+def init_wandb_online(**kwargs):
+    import wandb
+
+    # Production runs must log online; never fall back to offline or disabled.
+    if os.environ.get("WANDB_MODE", "online") != "online":
+        raise RuntimeError(f"WANDB_MODE={os.environ['WANDB_MODE']}: production runs need online W&B")
+    run = wandb.init(mode="online", **kwargs)
+    if run is None or getattr(run, "disabled", False) or getattr(run, "offline", False):
+        raise RuntimeError("W&B did not start in online mode")
+    print(f"[INFO] W&B run {run.url}", flush=True)
+    return run
+
+
 class RunLogger:
     """Same interface as SummaryWriter.add_scalar. Scalars of one step go to W&B in one call at commit()."""
 
@@ -56,15 +69,7 @@ class RunLogger:
         if not use_wandb:
             print("[WARN] W&B is off (--no-wandb): smoke test only, not a production run", flush=True)
             return
-        import wandb
-
-        # Production runs must log online; never fall back to offline or disabled.
-        if os.environ.get("WANDB_MODE", "online") != "online":
-            raise RuntimeError(f"WANDB_MODE={os.environ['WANDB_MODE']}: production training needs online W&B")
-        self.run = wandb.init(project=project, entity=entity, name=run_name, config=config, dir=str(log_dir), mode="online")
-        if self.run is None or getattr(self.run, "disabled", False) or getattr(self.run, "offline", False):
-            raise RuntimeError("W&B did not start in online mode")
-        print(f"[INFO] W&B run {self.run.url}", flush=True)
+        self.run = init_wandb_online(project=project, entity=entity, name=run_name, config=config, dir=str(log_dir))
 
     def add_scalar(self, key: str, value: float, step: int) -> None:
         self.tb.add_scalar(key, value, step)
