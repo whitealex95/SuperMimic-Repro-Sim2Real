@@ -5,7 +5,7 @@
 
 Benchmark protocol as in scripts/eval_benchmark.py (every clip once from its first frame, deterministic policy, no noise
 or DR). One env is built and reused for all checkpoints. Per-checkpoint results go to <run-dir>/eval_<set>/ckpt_*.json
-and are reused on restart. The W&B run (<train run>_eval) resumes from <run-dir>/eval_<set>/wandb_run.json.
+and are reused on restart. The W&B run (--wandb-name, default <train run>_eval) resumes from <run-dir>/eval_<set>/wandb_run.json.
 
 x axes: train/iteration, and train/hours = the run's TensorBoard time/hours at that iteration (training-loop wall-clock
 since the loop started, setup excluded, logging and earlier checkpoint saves included).
@@ -73,7 +73,7 @@ def wandb_row(it: int, hours: float | None, s: dict, eval_s: float) -> dict:
 def main(run_dir: Path, npz_dir: Path = Path("data/npz/lafan1"), library: Path | None = None, clips: list[str] | None = None,
          set_name: str | None = None, num_envs: int = 1024, device: str = "cuda:0", every: int = 4000,
          watch: bool = False, poll_s: float = 300.0, idle_hours: float = 3.0, min_ckpt_age_s: float = 60.0,
-         wandb_project: str = "supermimic", wandb_entity: str | None = None) -> None:
+         wandb_project: str = "supermimic", wandb_entity: str | None = None, wandb_name: str | None = None) -> None:
     """every: score checkpoints whose iteration is a multiple of this. watch: wait for new checkpoints until the
     run's last iteration is scored or no new checkpoint arrives for idle_hours."""
     files = [str(library)] if library is not None else [str(f) for f in discover_npz(npz_dir, names=clips)]
@@ -114,7 +114,7 @@ def main(run_dir: Path, npz_dir: Path = Path("data/npz/lafan1"), library: Path |
         "hardware": hardware_info(device), "git": git_info(),
     }
     train_name = first_cfg.get("run_name") or run_dir.name
-    run = init_wandb_online(project=wandb_project, entity=wandb_entity, name=f"{train_name}_eval", group=train_name, job_type="eval",
+    run = init_wandb_online(project=wandb_project, entity=wandb_entity, name=wandb_name or f"{train_name}_eval", group=train_name, job_type="eval",
                             id=state["id"], resume="allow", config=config, dir=str(out_dir))
     state["id"] = run.id
     state_path.write_text(json.dumps(state))
