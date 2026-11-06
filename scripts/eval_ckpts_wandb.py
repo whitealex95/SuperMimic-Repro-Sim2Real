@@ -7,6 +7,9 @@ Benchmark protocol as in scripts/eval_benchmark.py (every clip once from its fir
 or DR). One env is built and reused for all checkpoints. Per-checkpoint results go to <run-dir>/eval_<set>/ckpt_*.json
 and are reused on restart. The W&B run (--wandb-name, default <train run>_eval) resumes from <run-dir>/eval_<set>/wandb_run.json.
 
+--render-clips: every --render-every scored checkpoints, scripts/render_video.py renders these clips (own env, in a
+subprocess) to <run-dir>/eval_<set>/render/ and the videos go to the same W&B run.
+
 x axes: train/iteration, and train/hours = the run's TensorBoard time/hours at that iteration (training-loop wall-clock
 since the loop started, setup excluded, logging and earlier checkpoint saves included).
 """
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -33,6 +37,7 @@ from supermimic.eval.benchmark import (
 )
 from supermimic.training.run_logger import git_info, hardware_info, init_wandb_online
 
+ROOT = Path(__file__).resolve().parents[1]
 CKPT_RE = re.compile(r"ckpt_(\d{7})\.pt$")
 ENV_KEYS = ("future_frames", "anchor_obs", "heading_ori_obs", "lock_waist", "lock_waist_refs")
 
@@ -57,6 +62,16 @@ def train_wandb_id(run_dir: Path) -> str | None:
     return latest.resolve().name.split("-")[-1] if latest.exists() else None
 
 
+def render_ckpt(path: Path, it: int, clips: list[str], npz_dir: Path, out: Path, device: str, camera: str) -> list[tuple[str, Path, dict]]:
+    tag = f"it{it:07d}"
+    vids = [(c, out / f"{tag}__{c}.mp4", out / f"{tag}__{c}.json") for c in clips]
+    if not all(v.exists() and m.exists() for _, v, m in vids):
+        subprocess.run(["uv", "run", "--with", "imageio", "--with", "imageio-ffmpeg", "python", "scripts/render_video.py",
+                        "--ckpt", str(path.resolve()), "--clips", *clips, "--npz-dir", str(npz_dir.resolve()), "--out", str(out.resolve()),
+                        "--tag", tag, "--device", device, "--camera", camera], cwd=ROOT, check=True)
+    return [(c, v, json.loads(m.read_text())) for c, v, m in vids]
+
+
 def wandb_row(it: int, hours: float | None, s: dict, eval_s: float) -> dict:
     row = {"train/iteration": it, "time/eval_s": eval_s}
     if hours is not None:
@@ -73,7 +88,8 @@ def wandb_row(it: int, hours: float | None, s: dict, eval_s: float) -> dict:
 def main(run_dir: Path, npz_dir: Path = Path("data/npz/lafan1"), library: Path | None = None, clips: list[str] | None = None,
          set_name: str | None = None, num_envs: int = 1024, device: str = "cuda:0", every: int = 4000,
          watch: bool = False, poll_s: float = 300.0, idle_hours: float = 3.0, min_ckpt_age_s: float = 60.0,
-         wandb_project: str = "supermimic", wandb_entity: str | None = None, wandb_name: str | None = None) -> None:
+         wandb_project: str = "supermimic", wandb_entity: str | None = None, wandb_name: str | None = None,
+         render_clips: list[str] | None = None, render_npz_dir: Path | None = None, render_every: int = 10, render_camera: str = "front") -> None:
     """every: score checkpoints whose iteration is a multiple of this. watch: wait for new checkpoints until the
     run's last iteration is scored or no new checkpoint arrives for idle_hours."""
     files = [str(library)] if library is not None else [str(f) for f in discover_npz(npz_dir, names=clips)]
@@ -122,6 +138,7 @@ def main(run_dir: Path, npz_dir: Path = Path("data/npz/lafan1"), library: Path |
     run.define_metric("train/hours")
     run.define_metric("eval/*", step_metric="train/hours")
     run.define_metric("time/eval_s", step_metric="train/iteration")
+    run.define_metric("render/*", step_metric="train/hours")
     run.summary["time/env_build_s"] = env_build_s
 
     hours: dict[int, float] = {}
@@ -153,7 +170,16 @@ def main(run_dir: Path, npz_dir: Path = Path("data/npz/lafan1"), library: Path |
                     del policy
                 s = rec["summary"]
                 h = hours.get(it)
-                run.log(wandb_row(it, h, s, rec["eval_s"]))
+                row = wandb_row(it, h, s, rec["eval_s"])
+                if render_clips and it % (every * render_every) == 0:
+                    import wandb
+
+                    for c, v, meta in render_ckpt(path, it, render_clips, render_npz_dir or npz_dir, out_dir / "render", device, render_camera):
+                        row[f"render/{c}"] = wandb.Video(str(v), format="mp4", caption=f"it {it}")
+                        row[f"render/{c}/mean_reward"] = meta["mean_reward"]
+                        row[f"render/{c}/steps"] = meta["steps"]
+                        row[f"render/{c}/fail_step"] = meta["fail_step"]
+                run.log(row)
                 logged.add(it)
                 state["logged"] = sorted(logged)
                 state_path.write_text(json.dumps(state))
