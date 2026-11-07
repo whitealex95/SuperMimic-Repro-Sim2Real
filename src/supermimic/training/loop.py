@@ -27,6 +27,16 @@ from supermimic.world_model.wm_trainer import WorldModelTrainer
 from supermimic.world_model.world_model import WorldModel
 
 
+def tb_hours_at(tb_dir: Path, iteration: int) -> float | None:
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    acc = EventAccumulator(str(tb_dir), size_guidance={"scalars": 0})
+    acc.Reload()
+    if "time/hours" not in acc.Tags()["scalars"]:
+        return None
+    return {e.step: e.value for e in acc.Scalars("time/hours")}.get(iteration)
+
+
 class Trainer:
     def __init__(self, cfg: TrainConfig):
         t_setup = time.perf_counter()
@@ -216,8 +226,10 @@ class Trainer:
         self.iteration = 0
         self.num_updates = 0
         self._utd_acc = 0.0
+        self.resumed_hours = 0.0
         if cfg.resume is not None:
             self.load(cfg.resume)
+        self.hours = self.resumed_hours
         # Warm-up counts from this run's start: a resumed run starts with an empty replay buffer too.
         self.start_iteration = self.iteration
         self.start_updates = self.num_updates
@@ -232,6 +244,7 @@ class Trainer:
             {
                 "iteration": self.iteration,
                 "num_updates": self.num_updates,
+                "hours": self.hours,
                 "wm": self.wm.state_dict(),
                 "policy": self.policy.state_dict(),
                 "critic": self.critic.state_dict(),
@@ -260,8 +273,14 @@ class Trainer:
             sampler = self.command.load_sampler_state(ck)
         self.iteration = ck["iteration"]
         self.num_updates = ck["num_updates"]
+        hours = ck.get("hours")
+        if hours is None:  # checkpoints written before "hours" was saved: the writing run's TensorBoard has it
+            hours = tb_hours_at(Path(path).parent / "tb", self.iteration)
+        if hours is None and self.is_main:
+            print(f"[WARN] no time/hours for iteration {self.iteration}: time/hours restarts at 0", flush=True)
+        self.resumed_hours = float(hours or 0.0)
         if self.is_main:
-            print(f"[INFO] resumed from {path} at iteration {self.iteration}; {sampler}")
+            print(f"[INFO] resumed from {path} at iteration {self.iteration} ({self.resumed_hours:.2f} h); {sampler}")
 
     # ------------------------------------------------------------------ learning rates
 
@@ -364,7 +383,8 @@ class Trainer:
                 for k, v in timers.items():
                     totals[k] += v
                 it = self.iteration
-                elapsed = time.time() - t_start
+                elapsed = time.time() - t_start + 3600 * self.resumed_hours
+                self.hours = elapsed / 3600
                 if self.world > 1:
                     # Every rank must issue the same collectives: reduce (sum, count) unconditionally.
                     tot = allreduce_mean(float(sum(finished_returns))) * self.world
